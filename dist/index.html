@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#0f172a" />
     <title>Control Robot Bluetooth</title>
-    <script type="module" crossorigin src="./assets/index-BXj1uSGl.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-rJbBkDln.css">
+    <script type="module" crossorigin src="./assets/index-DZAzmwjQ.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-C_sKOi8b.css">
   </head>
   <body>
     <main class="app-shell">
       <section class="status-bar" aria-label="Estado del robot">
         <div>
-          <p class="eyebrow">Robot BLE</p>
+          <p class="eyebrow">Robot Bluetooth</p>
           <h1>Control remoto</h1>
         </div>
         <div id="connectionPill" class="connection-pill" data-state="disconnected">
@@ -32,13 +32,33 @@
         </div>
       </section>
 
-      <label class="mode-selector">
-        <span>Enviar al Arduino</span>
-        <select id="sendMode">
-          <option value="xy">Coordenadas X/Y</option>
-          <option value="letters">Letras F/B/L/R/S</option>
-        </select>
-      </label>
+      <section class="settings-panel" aria-label="Configuracion de conexion">
+        <label class="mode-selector">
+          <span>Conexion</span>
+          <select id="connectionMode">
+            <option value="ble">Bluetooth BLE UART</option>
+            <option value="serial">Serial HC-05 / HC-06</option>
+          </select>
+        </label>
+
+        <label class="mode-selector">
+          <span>Baudios HC-05</span>
+          <select id="baudRate">
+            <option value="9600">9600</option>
+            <option value="38400">38400</option>
+            <option value="57600">57600</option>
+            <option value="115200">115200</option>
+          </select>
+        </label>
+
+        <label class="mode-selector mode-selector-wide">
+          <span>Enviar al Arduino</span>
+          <select id="sendMode">
+            <option value="xy">Coordenadas X/Y</option>
+            <option value="letters">Letras F/B/L/R/S</option>
+          </select>
+        </label>
+      </section>
 
       <section class="control-pad" aria-label="Joystick de control">
         <div id="joystickBase" class="joystick-base">
@@ -49,11 +69,11 @@
       </section>
 
       <button id="connectButton" class="connect-button" type="button">
-        Conectar Bluetooth
+        Conectar Bluetooth BLE
       </button>
 
       <p id="messageLog" class="message-log" aria-live="polite">
-        Esperando conexión con el robot.
+        Esperando conexion con el robot.
       </p>
     </main>
 

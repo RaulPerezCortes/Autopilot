@@ -22,7 +22,7 @@ export class BluetoothRobot {
 
   async connect() {
     if (!this.isSupported) {
-      throw new Error("Web Bluetooth no está disponible en este navegador.");
+      throw new Error("Web Bluetooth no esta disponible en este navegador.");
     }
 
     this.onConnectionChange("connecting");
@@ -78,6 +78,72 @@ export class BluetoothRobot {
     this.server = null;
     this.onConnectionChange("disconnected");
     this.onLog("Bluetooth desconectado.");
+  }
+}
+
+export class SerialRobot {
+  constructor({ onConnectionChange, onLog, getBaudRate }) {
+    this.port = null;
+    this.writer = null;
+    this.encoder = new TextEncoder();
+    this.onConnectionChange = onConnectionChange;
+    this.onLog = onLog;
+    this.getBaudRate = getBaudRate;
+  }
+
+  get isSupported() {
+    return "serial" in navigator;
+  }
+
+  get isConnected() {
+    return Boolean(this.port && this.writer);
+  }
+
+  async connect() {
+    if (!this.isSupported) {
+      throw new Error("Web Serial no esta disponible. Usa Chrome o Edge en HTTPS/localhost.");
+    }
+
+    this.onConnectionChange("connecting");
+    this.onLog("Selecciona el puerto serie del HC-05 emparejado...");
+
+    this.port = await navigator.serial.requestPort();
+    await this.port.open({ baudRate: this.getBaudRate() });
+    this.writer = this.port.writable.getWriter();
+
+    this.onConnectionChange("connected");
+    this.onLog(`Conectado por puerto serie a ${this.getBaudRate()} baudios.`);
+  }
+
+  async disconnect() {
+    if (this.writer) {
+      await this.writer.close();
+      this.writer = null;
+    }
+
+    if (this.port) {
+      await this.port.close();
+      this.port = null;
+    }
+
+    this.onConnectionChange("disconnected");
+    this.onLog("Puerto serie desconectado.");
+  }
+
+  async sendCoordinates({ x, y }) {
+    const message = `X:${formatAxis(x)},Y:${formatAxis(y)}\n`;
+    return this.sendMessage(message);
+  }
+
+  async sendCommand(command) {
+    return this.sendMessage(command);
+  }
+
+  async sendMessage(message) {
+    if (!this.isConnected) return false;
+
+    await this.writer.write(this.encoder.encode(message));
+    return true;
   }
 }
 

@@ -1,4 +1,4 @@
-import { BluetoothRobot } from "./bluetooth.js";
+import { BluetoothRobot, SerialRobot } from "./bluetooth.js";
 import { JoystickController } from "./joystick.js";
 
 const SEND_INTERVAL_MS = 50;
@@ -8,6 +8,8 @@ const elements = {
   connectionPill: document.querySelector("#connectionPill"),
   connectionState: document.querySelector("#connectionState"),
   messageLog: document.querySelector("#messageLog"),
+  connectionMode: document.querySelector("#connectionMode"),
+  baudRate: document.querySelector("#baudRate"),
   sendMode: document.querySelector("#sendMode"),
   xValue: document.querySelector("#xValue"),
   yValue: document.querySelector("#yValue"),
@@ -25,6 +27,12 @@ const bluetoothRobot = new BluetoothRobot({
   onLog: updateLog,
 });
 
+const serialRobot = new SerialRobot({
+  onConnectionChange: updateConnectionState,
+  onLog: updateLog,
+  getBaudRate: () => Number(elements.baudRate.value),
+});
+
 const joystick = new JoystickController({
   baseElement: elements.joystickBase,
   knobElement: elements.joystickKnob,
@@ -37,26 +45,39 @@ const joystick = new JoystickController({
 joystick.init();
 updateConnectionState("disconnected");
 updateTelemetry(currentPosition);
+updateConnectionMode();
 
 elements.connectButton.addEventListener("click", async () => {
-  if (bluetoothRobot.isConnected) {
-    await bluetoothRobot.disconnect();
+  const robot = getActiveRobot();
+
+  if (robot.isConnected) {
+    await robot.disconnect();
     return;
   }
 
   try {
     elements.connectButton.disabled = true;
-    await bluetoothRobot.connect();
+    await robot.connect();
   } catch (error) {
     updateConnectionState("disconnected");
-    updateLog(error.message || "No se pudo conectar por Bluetooth.");
+    updateLog(error.message || "No se pudo conectar con el robot.");
   } finally {
     elements.connectButton.disabled = false;
   }
 });
 
+elements.connectionMode.addEventListener("change", async () => {
+  if (getInactiveRobot().isConnected) {
+    await getInactiveRobot().disconnect();
+  }
+
+  updateConnectionState("disconnected");
+  updateConnectionMode();
+});
+
 sendTimer = window.setInterval(async () => {
-  if (!bluetoothRobot.isConnected) return;
+  const robot = getActiveRobot();
+  if (!robot.isConnected) return;
 
   try {
     const sent = elements.sendMode.value === "letters"
@@ -73,6 +94,9 @@ sendTimer = window.setInterval(async () => {
 
 window.addEventListener("pagehide", () => {
   window.clearInterval(sendTimer);
+  if (getActiveRobot().isConnected) {
+    getActiveRobot().disconnect();
+  }
 });
 
 function updateConnectionState(state) {
@@ -85,7 +109,9 @@ function updateConnectionState(state) {
   elements.connectionPill.dataset.state = state;
   elements.connectionState.textContent = labels[state] || labels.disconnected;
   elements.connectButton.classList.toggle("is-connected", state === "connected");
-  elements.connectButton.textContent = state === "connected" ? "Desconectar Bluetooth" : "Conectar Bluetooth";
+  elements.connectionMode.disabled = state !== "disconnected";
+  elements.baudRate.disabled = state !== "disconnected" || elements.connectionMode.value !== "serial";
+  elements.connectButton.textContent = getConnectButtonLabel(state);
 }
 
 function updateTelemetry({ x, y }) {
@@ -103,13 +129,13 @@ function positionsAreEqual(a, b) {
 
 async function sendCoordinates() {
   if (positionsAreEqual(currentPosition, lastSentPosition)) return false;
-  return bluetoothRobot.sendCoordinates(currentPosition);
+  return getActiveRobot().sendCoordinates(currentPosition);
 }
 
 async function sendLetterCommand() {
   const command = positionToCommand(currentPosition);
   if (command === lastSentCommand) return false;
-  return bluetoothRobot.sendCommand(command);
+  return getActiveRobot().sendCommand(command);
 }
 
 function updateLastSentValue() {
@@ -127,4 +153,28 @@ function positionToCommand({ x, y }) {
   if (Math.abs(x) < deadZone && Math.abs(y) < deadZone) return "S";
   if (Math.abs(y) >= Math.abs(x)) return y > 0 ? "F" : "B";
   return x > 0 ? "R" : "L";
+}
+
+function getActiveRobot() {
+  return elements.connectionMode.value === "serial" ? serialRobot : bluetoothRobot;
+}
+
+function getInactiveRobot() {
+  return elements.connectionMode.value === "serial" ? bluetoothRobot : serialRobot;
+}
+
+function updateConnectionMode() {
+  const isSerial = elements.connectionMode.value === "serial";
+  elements.baudRate.disabled = !isSerial;
+  updateLog(isSerial
+    ? "HC-05 listo: emparejalo en el sistema y selecciona su puerto serie."
+    : "BLE UART listo: conecta un dispositivo compatible con Nordic UART.");
+}
+
+function getConnectButtonLabel(state) {
+  const transportLabel = elements.connectionMode.value === "serial" ? "Serial HC-05" : "Bluetooth BLE";
+
+  if (state === "connected") return `Desconectar ${transportLabel}`;
+  if (state === "connecting") return `Conectando ${transportLabel}`;
+  return `Conectar ${transportLabel}`;
 }

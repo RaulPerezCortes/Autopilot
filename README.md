@@ -1,6 +1,6 @@
 # Control Robot Bluetooth con Vite
 
-Aplicacion web movil en JavaScript vanilla para controlar un robot Arduino/ESP32 mediante Web Bluetooth. El joystick envia coordenadas normalizadas cada 50 ms como maximo con este formato:
+Aplicacion web movil en JavaScript vanilla para controlar un robot Arduino/ESP32 mediante Web Bluetooth BLE o Web Serial. El modo Web Serial permite usar modulos Bluetooth clasicos como HC-05 y HC-06 cuando ya estan emparejados con el sistema operativo. El joystick envia coordenadas normalizadas cada 50 ms como maximo con este formato:
 
 ```text
 X:0.52,Y:-0.33
@@ -13,7 +13,16 @@ npm install
 npm run dev
 ```
 
-Abre la URL local de Vite desde Chrome. Web Bluetooth exige un contexto seguro: `localhost` o HTTPS.
+Abre la URL local de Vite desde Chrome o Edge. Web Bluetooth y Web Serial exigen un contexto seguro: `localhost` o HTTPS.
+
+## Usar HC-05 / HC-06 con Web Serial
+
+1. Empareja el HC-05/HC-06 desde el Bluetooth del sistema operativo. El PIN habitual es `1234` o `0000`.
+2. En la app, cambia `Conexion` a `Serial HC-05 / HC-06`.
+3. Selecciona los baudios configurados en el modulo. Lo normal en modo datos es `9600`.
+4. Pulsa `Conectar Serial HC-05` y elige el puerto serie Bluetooth en el dialogo del navegador.
+
+El modo `Coordenadas X/Y` envia lineas terminadas en `\n`, por ejemplo `X:0.52,Y:-0.33`. El modo `Letras F/B/L/R/S` envia un solo caracter por comando para sketches que leen con `Serial.read()`.
 
 ## Publicar en GitHub Pages
 
