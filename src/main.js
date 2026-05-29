@@ -1,4 +1,3 @@
-import "./style.css";
 import { BluetoothRobot } from "./bluetooth.js";
 import { JoystickController } from "./joystick.js";
 
