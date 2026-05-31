@@ -35,7 +35,7 @@
         <label class="mode-selector">
           <span>Conexion</span>
           <select id="connectionMode">
-            <option value="ble">Bluetooth BLE UART</option>
+            <option value="ble">Bluetooth BLE UART compatible</option>
             <option value="serial">Serial HC-05 / HC-06</option>
           </select>
         </label>
@@ -54,7 +54,7 @@
           <span>Enviar al Arduino</span>
           <select id="sendMode">
             <option value="xy">Coordenadas X/Y</option>
-            <option value="letters">Letras F/B/L/R/S</option>
+            <option value="letters" selected>Letras F/B/L/R/S</option>
           </select>
         </label>
       </section>
@@ -65,6 +65,14 @@
           <div class="axis axis-y"></div>
           <div id="joystickKnob" class="joystick-knob" role="application" aria-label="Joystick tactil"></div>
         </div>
+      </section>
+
+      <section class="motor-buttons" aria-label="Botones de movimiento">
+        <button class="motor-button" type="button" data-command="F">F<span>Adelante</span></button>
+        <button class="motor-button" type="button" data-command="L">L<span>Izquierda</span></button>
+        <button class="motor-button stop-button" type="button" data-command="S">S<span>Parar</span></button>
+        <button class="motor-button" type="button" data-command="R">R<span>Derecha</span></button>
+        <button class="motor-button" type="button" data-command="B">B<span>Atras</span></button>
       </section>
 
       <button id="connectButton" class="connect-button" type="button">

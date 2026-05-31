@@ -4,9 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#0f172a" />
-    <title>Control Robot Bluetooth</title>
-    <script type="module" crossorigin src="./assets/index-DZAzmwjQ.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-C_sKOi8b.css">
+    <title>Control Robot Bluetooth</title>
+    <script type="module" crossorigin src="./assets/index-42t7Y2ez.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CSu8zQIZ.css">
   </head>
   <body>
     <main class="app-shell">
@@ -36,7 +36,7 @@
         <label class="mode-selector">
           <span>Conexion</span>
           <select id="connectionMode">
-            <option value="ble">Bluetooth BLE UART</option>
+            <option value="ble">Bluetooth BLE UART compatible</option>
             <option value="serial">Serial HC-05 / HC-06</option>
           </select>
         </label>
@@ -55,7 +55,7 @@
           <span>Enviar al Arduino</span>
           <select id="sendMode">
             <option value="xy">Coordenadas X/Y</option>
-            <option value="letters">Letras F/B/L/R/S</option>
+            <option value="letters" selected>Letras F/B/L/R/S</option>
           </select>
         </label>
       </section>
@@ -68,6 +68,14 @@
         </div>
       </section>
 
+      <section class="motor-buttons" aria-label="Botones de movimiento">
+        <button class="motor-button" type="button" data-command="F">F<span>Adelante</span></button>
+        <button class="motor-button" type="button" data-command="L">L<span>Izquierda</span></button>
+        <button class="motor-button stop-button" type="button" data-command="S">S<span>Parar</span></button>
+        <button class="motor-button" type="button" data-command="R">R<span>Derecha</span></button>
+        <button class="motor-button" type="button" data-command="B">B<span>Atras</span></button>
+      </section>
+
       <button id="connectButton" class="connect-button" type="button">
         Conectar Bluetooth BLE
       </button>
@@ -76,6 +84,6 @@
         Esperando conexion con el robot.
       </p>
     </main>
-
+
   </body>
 </html>

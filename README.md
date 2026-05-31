@@ -30,12 +30,21 @@ El proyecto incluye un workflow en `.github/workflows/deploy.yml`. Al hacer push
 
 En GitHub, configura Pages para usar `GitHub Actions` como origen de despliegue.
 
-## BLE UART esperado
+## BLE UART compatible
 
-La app busca un dispositivo BLE con el servicio Nordic UART:
+La app muestra cualquier periferico BLE que el navegador detecte y, al conectar, prueba varios perfiles UART comunes:
 
-- Servicio: `6e400001-b5a3-f393-e0a9-e50e24dcca9e`
-- Caracteristica RX: `6e400002-b5a3-f393-e0a9-e50e24dcca9e`
+- Nordic UART:
+  - Servicio: `6e400001-b5a3-f393-e0a9-e50e24dcca9e`
+  - Caracteristica RX: `6e400002-b5a3-f393-e0a9-e50e24dcca9e`
+- HM-10 / AT-09:
+  - Servicio: `0000ffe0-0000-1000-8000-00805f9b34fb`
+  - Caracteristica RX/TX: `0000ffe1-0000-1000-8000-00805f9b34fb`
+- JDY / BT05:
+  - Servicio: `0000ffe5-0000-1000-8000-00805f9b34fb`
+  - Caracteristica RX/TX: `0000ffe9-0000-1000-8000-00805f9b34fb`
+
+Una app movil de escaneo BLE puede mostrar dispositivos que la web no puede usar para controlar el robot. Web Bluetooth solo funciona con BLE y necesita una caracteristica GATT de escritura; si el modulo es Bluetooth clasico como HC-05/HC-06, usa el modo `Serial HC-05 / HC-06`.
 
 El navegador escribe lineas de texto terminadas en `\n`. El ESP32 acumula caracteres hasta el salto de linea, parsea `X:<valor>,Y:<valor>` y transforma esos valores en velocidad izquierda/derecha.
 

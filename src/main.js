@@ -15,11 +15,14 @@ const elements = {
   yValue: document.querySelector("#yValue"),
   joystickBase: document.querySelector("#joystickBase"),
   joystickKnob: document.querySelector("#joystickKnob"),
+  motorButtons: document.querySelectorAll("[data-command]"),
 };
 
 let currentPosition = { x: 0, y: 0 };
 let lastSentPosition = { x: 0, y: 0 };
 let lastSentCommand = "";
+let heldMotorCommand = null;
+let pendingStopCommand = false;
 let sendTimer = null;
 
 const bluetoothRobot = new BluetoothRobot({
@@ -75,12 +78,19 @@ elements.connectionMode.addEventListener("change", async () => {
   updateConnectionMode();
 });
 
+elements.motorButtons.forEach((button) => {
+  button.addEventListener("pointerdown", handleMotorButtonDown);
+  button.addEventListener("pointerup", handleMotorButtonUp);
+  button.addEventListener("pointercancel", handleMotorButtonUp);
+  button.addEventListener("lostpointercapture", handleMotorButtonUp);
+});
+
 sendTimer = window.setInterval(async () => {
   const robot = getActiveRobot();
   if (!robot.isConnected) return;
 
   try {
-    const sent = elements.sendMode.value === "letters"
+    const sent = heldMotorCommand !== null || pendingStopCommand || elements.sendMode.value === "letters"
       ? await sendLetterCommand()
       : await sendCoordinates();
 
@@ -128,23 +138,30 @@ function positionsAreEqual(a, b) {
 }
 
 async function sendCoordinates() {
-  if (positionsAreEqual(currentPosition, lastSentPosition)) return false;
   return getActiveRobot().sendCoordinates(currentPosition);
 }
 
 async function sendLetterCommand() {
-  const command = positionToCommand(currentPosition);
-  if (command === lastSentCommand) return false;
+  const command = getCurrentLetterCommand();
+
+  if (command === lastSentCommand && command === "S" && heldMotorCommand === null) return false;
   return getActiveRobot().sendCommand(command);
 }
 
 function updateLastSentValue() {
-  if (elements.sendMode.value === "letters") {
-    lastSentCommand = positionToCommand(currentPosition);
+  if (heldMotorCommand !== null || pendingStopCommand || elements.sendMode.value === "letters") {
+    lastSentCommand = getCurrentLetterCommand();
+    pendingStopCommand = false;
     return;
   }
 
   lastSentPosition = { ...currentPosition };
+}
+
+function getCurrentLetterCommand() {
+  if (pendingStopCommand) return "S";
+  if (heldMotorCommand !== null) return heldMotorCommand;
+  return positionToCommand(currentPosition);
 }
 
 function positionToCommand({ x, y }) {
@@ -168,7 +185,32 @@ function updateConnectionMode() {
   elements.baudRate.disabled = !isSerial;
   updateLog(isSerial
     ? "HC-05 listo: emparejalo en el sistema y selecciona su puerto serie."
-    : "BLE UART listo: conecta un dispositivo compatible con Nordic UART.");
+    : "BLE UART listo: selecciona tu modulo y se probaran perfiles Nordic/HM-10 compatibles.");
+}
+
+function handleMotorButtonDown(event) {
+  const button = event.currentTarget;
+
+  event.preventDefault();
+  button.setPointerCapture(event.pointerId);
+  button.classList.add("is-pressed");
+  heldMotorCommand = button.dataset.command;
+  pendingStopCommand = false;
+}
+
+function handleMotorButtonUp(event) {
+  const button = event.currentTarget;
+
+  if (button.hasPointerCapture(event.pointerId)) {
+    button.releasePointerCapture(event.pointerId);
+  }
+
+  button.classList.remove("is-pressed");
+
+  if (heldMotorCommand === button.dataset.command) {
+    heldMotorCommand = null;
+    pendingStopCommand = true;
+  }
 }
 
 function getConnectButtonLabel(state) {
