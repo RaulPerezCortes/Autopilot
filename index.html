@@ -31,6 +31,15 @@
         </div>
       </section>
 
+      <section class="app-mode" aria-label="Modo de control">
+        <button id="manualModeButton" class="mode-tab is-active" type="button" aria-pressed="true">
+          Manual
+        </button>
+        <button id="locationsModeButton" class="mode-tab" type="button" aria-pressed="false">
+          Ubicaciones
+        </button>
+      </section>
+
       <section class="settings-panel" aria-label="Configuracion de conexion">
         <label class="mode-selector">
           <span>Conexion</span>
@@ -50,16 +59,13 @@
           </select>
         </label>
 
-        <label class="mode-selector mode-selector-wide">
-          <span>Enviar al Arduino</span>
-          <select id="sendMode">
-            <option value="xy">Coordenadas X/Y</option>
-            <option value="letters" selected>Letras F/B/L/R/S</option>
-          </select>
-        </label>
       </section>
 
-      <section class="control-pad" aria-label="Joystick de control">
+      <button id="connectButton" class="connect-button" type="button">
+        Conectar Bluetooth BLE
+      </button>
+
+      <section id="manualPanel" class="control-pad" aria-label="Joystick de control">
         <div id="joystickBase" class="joystick-base">
           <div class="axis axis-x"></div>
           <div class="axis axis-y"></div>
@@ -67,17 +73,50 @@
         </div>
       </section>
 
-      <section class="motor-buttons" aria-label="Botones de movimiento">
-        <button class="motor-button" type="button" data-command="F">F<span>Adelante</span></button>
-        <button class="motor-button" type="button" data-command="L">L<span>Izquierda</span></button>
-        <button class="motor-button stop-button" type="button" data-command="S">S<span>Parar</span></button>
-        <button class="motor-button" type="button" data-command="R">R<span>Derecha</span></button>
-        <button class="motor-button" type="button" data-command="B">B<span>Atras</span></button>
-      </section>
+      <section id="locationsPanel" class="locations-panel" aria-label="Ubicaciones guardadas" hidden>
+        <div class="location-status">
+          <div>
+            <span>GPS movil</span>
+            <strong id="gpsState">Sin iniciar</strong>
+          </div>
+          <button id="refreshLocationButton" class="secondary-button" type="button">
+            Actualizar
+          </button>
+        </div>
 
-      <button id="connectButton" class="connect-button" type="button">
-        Conectar Bluetooth BLE
-      </button>
+        <div class="gps-readout">
+          <div>
+            <span>Latitud</span>
+            <strong id="latitudeValue">--</strong>
+          </div>
+          <div>
+            <span>Longitud</span>
+            <strong id="longitudeValue">--</strong>
+          </div>
+          <div>
+            <span>Precision</span>
+            <strong id="accuracyValue">--</strong>
+          </div>
+        </div>
+
+        <label class="location-name">
+          <span>Nombre</span>
+          <input id="locationNameInput" type="text" inputmode="text" maxlength="32" placeholder="Base, puerta, punto 1" />
+        </label>
+
+        <button id="saveLocationButton" class="connect-button save-location" type="button">
+          Guardar ubicacion actual
+        </button>
+
+        <div class="saved-locations-header">
+          <span>Guardadas</span>
+          <button id="clearLocationsButton" class="text-button" type="button">
+            Borrar todo
+          </button>
+        </div>
+
+        <div id="savedLocationsList" class="saved-locations" aria-live="polite"></div>
+      </section>
 
       <p id="messageLog" class="message-log" aria-live="polite">
         Esperando conexion con el robot.

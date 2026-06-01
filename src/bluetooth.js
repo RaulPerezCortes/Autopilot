@@ -86,8 +86,9 @@ export class BluetoothRobot {
     return this.sendMessage(message);
   }
 
-  async sendCommand(command) {
-    return this.sendMessage(command);
+  async sendDestination({ latitude, longitude }) {
+    const message = `GOTO:${formatCoordinate(latitude)},${formatCoordinate(longitude)}\n`;
+    return this.sendMessage(message);
   }
 
   async sendMessage(message) {
@@ -274,8 +275,9 @@ export class SerialRobot {
     return this.sendMessage(message);
   }
 
-  async sendCommand(command) {
-    return this.sendMessage(command);
+  async sendDestination({ latitude, longitude }) {
+    const message = `GOTO:${formatCoordinate(latitude)},${formatCoordinate(longitude)}\n`;
+    return this.sendMessage(message);
   }
 
   async sendMessage(message) {
@@ -288,4 +290,8 @@ export class SerialRobot {
 
 export function formatAxis(value) {
   return Number(value).toFixed(2);
+}
+
+export function formatCoordinate(value) {
+  return Number(value).toFixed(7);
 }

@@ -3,8 +3,10 @@
 Aplicacion web movil en JavaScript vanilla para controlar un robot Arduino/ESP32 mediante Web Bluetooth BLE o Web Serial. El modo Web Serial permite usar modulos Bluetooth clasicos como HC-05 y HC-06 cuando ya estan emparejados con el sistema operativo. El joystick envia coordenadas normalizadas cada 50 ms como maximo con este formato:
 
 ```text
-X:0.52,Y:-0.33
+0.52,-0.33
 ```
+
+Tambien incluye un modo de ubicaciones: el movil, montado en el robot, usa su GPS para guardar puntos y despues enviar un destino guardado al robot.
 
 ## Ejecutar
 
@@ -22,7 +24,25 @@ Abre la URL local de Vite desde Chrome o Edge. Web Bluetooth y Web Serial exigen
 3. Selecciona los baudios configurados en el modulo. Lo normal en modo datos es `9600`.
 4. Pulsa `Conectar Serial HC-05` y elige el puerto serie Bluetooth en el dialogo del navegador.
 
-El modo `Coordenadas X/Y` envia lineas terminadas en `\n`, por ejemplo `X:0.52,Y:-0.33`. El modo `Letras F/B/L/R/S` envia un solo caracter por comando para sketches que leen con `Serial.read()`.
+La app envia coordenadas X/Y en lineas terminadas en `\n`.
+
+## Modo Ubicaciones
+
+1. Monta el movil en el robot y abre la app desde Chrome o Edge.
+2. Entra en `Ubicaciones`.
+3. Pulsa `Actualizar` para leer el GPS del movil.
+4. Escribe un nombre y pulsa `Guardar ubicacion actual`.
+5. Mas tarde, conecta el robot, entra en `Ubicaciones` y pulsa `Ir` en el punto guardado.
+
+Las ubicaciones se guardan en el navegador del movil con `localStorage`. Si borras datos del sitio o usas otro navegador, la lista no aparecera.
+
+Cuando pulsas `Ir`, la app envia una linea de texto por BLE o Serial:
+
+```text
+GOTO:40.4167754,-3.7037902
+```
+
+El firmware del robot debe parsear ese comando y navegar hasta la latitud/longitud recibida. El movil solo guarda y envia el destino; la autonomia final depende del codigo del robot, su GPS/brujula o de que el movil siga montado aportando posicion.
 
 ## Publicar en GitHub Pages
 
@@ -46,7 +66,7 @@ La app muestra cualquier periferico BLE que el navegador detecte y, al conectar,
 
 Una app movil de escaneo BLE puede mostrar dispositivos que la web no puede usar para controlar el robot. Web Bluetooth solo funciona con BLE y necesita una caracteristica GATT de escritura; si el modulo es Bluetooth clasico como HC-05/HC-06, usa el modo `Serial HC-05 / HC-06`.
 
-El navegador escribe lineas de texto terminadas en `\n`. El ESP32 acumula caracteres hasta el salto de linea, parsea `X:<valor>,Y:<valor>` y transforma esos valores en velocidad izquierda/derecha.
+El navegador escribe lineas de texto terminadas en `\n`. El ESP32 acumula caracteres hasta el salto de linea, parsea `<x>,<y>` para el joystick o `GOTO:<lat>,<lon>` para destinos guardados.
 
 ## Ejemplo ESP32 BLE + motores
 
@@ -103,15 +123,29 @@ void driveRobot(float x, float y) {
   setMotor(RIGHT_PWM, RIGHT_IN1, RIGHT_IN2, rightSpeed);
 }
 
+void goToDestination(double latitude, double longitude) {
+  // Implementa aqui la navegacion autonoma del robot hacia el destino.
+  // Necesitaras posicion actual, rumbo y control de motores.
+}
+
 void parseCommand(String line) {
   line.trim();
-  int xIndex = line.indexOf("X:");
-  int yIndex = line.indexOf(",Y:");
 
-  if (xIndex != 0 || yIndex < 0) return;
+  if (line.startsWith("GOTO:")) {
+    int commaIndex = line.indexOf(",");
+    if (commaIndex < 0) return;
 
-  float x = line.substring(2, yIndex).toFloat();
-  float y = line.substring(yIndex + 3).toFloat();
+    double latitude = line.substring(5, commaIndex).toDouble();
+    double longitude = line.substring(commaIndex + 1).toDouble();
+    goToDestination(latitude, longitude);
+    return;
+  }
+
+  int commaIndex = line.indexOf(",");
+  if (commaIndex < 0) return;
+
+  float x = line.substring(0, commaIndex).toFloat();
+  float y = line.substring(commaIndex + 1).toFloat();
   driveRobot(x, y);
 }
 
