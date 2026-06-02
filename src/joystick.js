@@ -8,6 +8,7 @@ export class JoystickController {
     this.position = { ...ZERO_POSITION };
     this.activePointerId = null;
     this.frameRequest = null;
+    this.enabled = true;
 
     this.handlePointerDown = this.handlePointerDown.bind(this);
     this.handlePointerMove = this.handlePointerMove.bind(this);
@@ -31,8 +32,17 @@ export class JoystickController {
     this.baseElement.removeEventListener("lostpointercapture", this.handlePointerUp);
   }
 
+  setEnabled(enabled) {
+    this.enabled = enabled;
+    this.baseElement.classList.toggle("is-disabled", !enabled);
+
+    if (!enabled && this.activePointerId !== null) {
+      this.handlePointerUp({ pointerId: this.activePointerId });
+    }
+  }
+
   handlePointerDown(event) {
-    if (this.activePointerId !== null) return;
+    if (!this.enabled || this.activePointerId !== null) return;
 
     this.activePointerId = event.pointerId;
     this.baseElement.setPointerCapture(event.pointerId);

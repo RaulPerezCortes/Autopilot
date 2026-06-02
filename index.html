@@ -35,6 +35,9 @@
         <button id="manualModeButton" class="mode-tab is-active" type="button" aria-pressed="true">
           Manual
         </button>
+        <button id="recordingsModeButton" class="mode-tab" type="button" aria-pressed="false">
+          Grabaciones
+        </button>
         <button id="locationsModeButton" class="mode-tab" type="button" aria-pressed="false">
           Ubicaciones
         </button>
@@ -65,12 +68,50 @@
         Conectar Bluetooth BLE
       </button>
 
-      <section id="manualPanel" class="control-pad" aria-label="Joystick de control">
-        <div id="joystickBase" class="joystick-base">
-          <div class="axis axis-x"></div>
-          <div class="axis axis-y"></div>
-          <div id="joystickKnob" class="joystick-knob" role="application" aria-label="Joystick tactil"></div>
+      <section id="manualPanel" class="manual-panel" aria-label="Joystick de control">
+        <div class="control-pad">
+          <div id="joystickBase" class="joystick-base">
+            <div class="axis axis-x"></div>
+            <div class="axis axis-y"></div>
+            <div id="joystickKnob" class="joystick-knob" role="application" aria-label="Joystick tactil"></div>
+          </div>
         </div>
+
+        <div class="recording-controls">
+          <label class="location-name">
+            <span>Nombre grabacion</span>
+            <input id="recordingNameInput" type="text" inputmode="text" maxlength="32" placeholder="Giro, prueba 1" />
+          </label>
+          <button id="recordButton" class="secondary-button record-button" type="button">
+            Iniciar grabacion
+          </button>
+        </div>
+      </section>
+
+      <section id="recordingsPanel" class="recordings-panel" aria-label="Grabaciones guardadas" hidden>
+        <div id="playbackProgress" class="playback-progress" hidden aria-live="polite">
+          <div>
+            <span>Reproduciendo</span>
+            <strong id="playbackProgressName">--</strong>
+          </div>
+          <div class="playback-step">
+            <span>Paso</span>
+            <strong id="playbackStepValue">0 / 0</strong>
+          </div>
+        </div>
+
+        <div class="saved-locations-header">
+          <span>Guardadas</span>
+          <button id="clearRecordingsButton" class="text-button" type="button">
+            Borrar todo
+          </button>
+        </div>
+
+        <div id="savedRecordingsList" class="saved-locations" aria-live="polite"></div>
+
+        <button id="stopPlaybackButton" class="connect-button stop-playback" type="button" hidden>
+          Detener reproduccion
+        </button>
       </section>
 
       <section id="locationsPanel" class="locations-panel" aria-label="Ubicaciones guardadas" hidden>

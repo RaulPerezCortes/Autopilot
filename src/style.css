@@ -151,7 +151,7 @@ h1 {
 .app-mode {
   min-height: 3rem;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem;
   padding: 0.35rem;
   border: 1px solid rgba(148, 163, 184, 0.18);
@@ -214,11 +214,89 @@ h1 {
   opacity: 0.72;
 }
 
+.manual-panel {
+  display: grid;
+  gap: 0.8rem;
+  align-content: start;
+}
+
 .control-pad {
   min-height: min(78vw, 22rem);
   display: grid;
   place-items: center;
   padding: 0.2rem 0;
+}
+
+.recording-controls {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.record-button.is-recording {
+  border-color: rgba(251, 113, 133, 0.55);
+  background: rgba(251, 113, 133, 0.14);
+  color: #fecdd3;
+}
+
+.joystick-base.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.recordings-panel {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  padding-bottom: 0.2rem;
+}
+
+.recordings-panel[hidden],
+.manual-panel[hidden] {
+  display: none;
+}
+
+.stop-playback {
+  min-height: 3.25rem;
+  font-size: 1rem;
+  background: linear-gradient(135deg, #fb7185, #f97316);
+  color: #fff7ed;
+  box-shadow: 0 1rem 2.8rem rgba(251, 113, 133, 0.22);
+}
+
+.playback-progress {
+  min-height: 4.4rem;
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  border-radius: 0.5rem;
+  background: rgba(20, 184, 166, 0.12);
+}
+
+.playback-progress div,
+.playback-step {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.playback-progress span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.playback-progress strong {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.playback-step strong {
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.4rem, 8vw, 1.85rem);
+  text-align: right;
 }
 
 .joystick-base {
@@ -314,8 +392,7 @@ h1 {
   padding-bottom: 0.2rem;
 }
 
-.locations-panel[hidden],
-.control-pad[hidden] {
+.locations-panel[hidden] {
   display: none;
 }
 
