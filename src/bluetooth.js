@@ -3,33 +3,41 @@ const BLE_UART_PROFILES = [
     name: "Nordic UART",
     serviceUuid: "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
     writeCharacteristicUuids: ["6e400002-b5a3-f393-e0a9-e50e24dcca9e"],
+    notifyCharacteristicUuids: ["6e400003-b5a3-f393-e0a9-e50e24dcca9e"],
   },
   {
     name: "HM-10 / AT-09 UART",
     serviceUuid: "0000ffe0-0000-1000-8000-00805f9b34fb",
     writeCharacteristicUuids: ["0000ffe1-0000-1000-8000-00805f9b34fb"],
+    notifyCharacteristicUuids: ["0000ffe1-0000-1000-8000-00805f9b34fb"],
   },
   {
     name: "JDY / BT05 UART",
     serviceUuid: "0000ffe5-0000-1000-8000-00805f9b34fb",
     writeCharacteristicUuids: ["0000ffe9-0000-1000-8000-00805f9b34fb"],
+    notifyCharacteristicUuids: ["0000ffe9-0000-1000-8000-00805f9b34fb"],
   },
 ];
 
 const OPTIONAL_BLE_SERVICES = BLE_UART_PROFILES.map((profile) => profile.serviceUuid);
 
 export class BluetoothRobot {
-  constructor({ onConnectionChange, onLog }) {
+  constructor({ onConnectionChange, onLog, onMessage }) {
     this.device = null;
     this.server = null;
     this.rxCharacteristic = null;
+    this.txCharacteristic = null;
     this.profileName = "";
     this.pendingMessage = null;
     this.sendTask = null;
     this.encoder = new TextEncoder();
+    this.decoder = new TextDecoder();
+    this.incomingBuffer = "";
     this.onConnectionChange = onConnectionChange;
     this.onLog = onLog;
+    this.onMessage = onMessage;
     this.handleDisconnected = this.handleDisconnected.bind(this);
+    this.handleCharacteristicValueChanged = this.handleCharacteristicValueChanged.bind(this);
   }
 
   get isSupported() {
@@ -60,6 +68,12 @@ export class BluetoothRobot {
       const { characteristic, profileName } = await findBleUartWriter(this.server);
       this.rxCharacteristic = characteristic;
       this.profileName = profileName;
+      this.txCharacteristic = await findBleUartNotifier(this.server, profileName);
+
+      if (this.txCharacteristic) {
+        await this.txCharacteristic.startNotifications();
+        this.txCharacteristic.addEventListener("characteristicvaluechanged", this.handleCharacteristicValueChanged);
+      }
 
       this.onConnectionChange("connected");
       this.onLog(`Conectado a ${this.device.name || "dispositivo BLE"} por ${profileName}.`);
@@ -143,12 +157,39 @@ export class BluetoothRobot {
     await this.rxCharacteristic.writeValue(data);
   }
 
+  handleCharacteristicValueChanged(event) {
+    const value = event.target.value;
+    this.processIncomingChunk(this.decoder.decode(value));
+  }
+
+  processIncomingChunk(chunk) {
+    this.incomingBuffer += chunk;
+
+    let newlineIndex = this.incomingBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = this.incomingBuffer.slice(0, newlineIndex).trim();
+      this.incomingBuffer = this.incomingBuffer.slice(newlineIndex + 1);
+
+      if (line && typeof this.onMessage === "function") {
+        this.onMessage(line);
+      }
+
+      newlineIndex = this.incomingBuffer.indexOf("\n");
+    }
+  }
+
   handleDisconnected() {
+    if (this.txCharacteristic) {
+      this.txCharacteristic.removeEventListener("characteristicvaluechanged", this.handleCharacteristicValueChanged);
+    }
+
     this.rxCharacteristic = null;
+    this.txCharacteristic = null;
     this.server = null;
     this.profileName = "";
     this.pendingMessage = null;
     this.sendTask = null;
+    this.incomingBuffer = "";
     this.onConnectionChange("disconnected");
     this.onLog("Bluetooth desconectado.");
   }
@@ -192,6 +233,39 @@ async function findBleUartWriter(server) {
   throw new Error("El dispositivo BLE no expone UART compatible. Si es HC-05/HC-06 usa el modo Serial; si es ESP32, anuncia Nordic UART o FFE0/FFE1.");
 }
 
+async function findBleUartNotifier(server, profileName) {
+  const profile = BLE_UART_PROFILES.find((item) => item.name === profileName);
+  if (!profile) return null;
+
+  let service;
+
+  try {
+    service = await server.getPrimaryService(profile.serviceUuid);
+  } catch {
+    return null;
+  }
+
+  for (const characteristicUuid of profile.notifyCharacteristicUuids || []) {
+    try {
+      const characteristic = await service.getCharacteristic(characteristicUuid);
+      if (characteristic.properties.notify || characteristic.properties.indicate) {
+        return characteristic;
+      }
+    } catch {
+      // Try the next notify characteristic for this profile.
+    }
+  }
+
+  try {
+    const characteristics = await service.getCharacteristics();
+    return characteristics.find((characteristic) => (
+      characteristic.properties.notify || characteristic.properties.indicate
+    )) || null;
+  } catch {
+    return null;
+  }
+}
+
 async function findAnyWritableCharacteristic(service) {
   try {
     const characteristics = await service.getCharacteristics();
@@ -222,12 +296,17 @@ function normalizeBluetoothError(error) {
 }
 
 export class SerialRobot {
-  constructor({ onConnectionChange, onLog, getBaudRate }) {
+  constructor({ onConnectionChange, onLog, onMessage, getBaudRate }) {
     this.port = null;
     this.writer = null;
+    this.reader = null;
+    this.readLoopActive = false;
     this.encoder = new TextEncoder();
+    this.decoder = new TextDecoder();
+    this.incomingBuffer = "";
     this.onConnectionChange = onConnectionChange;
     this.onLog = onLog;
+    this.onMessage = onMessage;
     this.getBaudRate = getBaudRate;
   }
 
@@ -250,12 +329,57 @@ export class SerialRobot {
     this.port = await navigator.serial.requestPort();
     await this.port.open({ baudRate: this.getBaudRate() });
     this.writer = this.port.writable.getWriter();
+    this.readLoopActive = true;
+    void this.readLoop();
 
     this.onConnectionChange("connected");
     this.onLog(`Conectado por puerto serie a ${this.getBaudRate()} baudios.`);
   }
 
+  async readLoop() {
+    if (!this.port?.readable) return;
+
+    this.reader = this.port.readable.getReader();
+
+    try {
+      while (this.readLoopActive) {
+        const { value, done } = await this.reader.read();
+        if (done) break;
+        this.processIncomingChunk(this.decoder.decode(value, { stream: true }));
+      }
+    } catch {
+      // Serial read loop ends when the port closes.
+    } finally {
+      if (this.reader) {
+        this.reader.releaseLock();
+        this.reader = null;
+      }
+    }
+  }
+
+  processIncomingChunk(chunk) {
+    this.incomingBuffer += chunk;
+
+    let newlineIndex = this.incomingBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = this.incomingBuffer.slice(0, newlineIndex).trim();
+      this.incomingBuffer = this.incomingBuffer.slice(newlineIndex + 1);
+
+      if (line && typeof this.onMessage === "function") {
+        this.onMessage(line);
+      }
+
+      newlineIndex = this.incomingBuffer.indexOf("\n");
+    }
+  }
+
   async disconnect() {
+    this.readLoopActive = false;
+
+    if (this.reader) {
+      await this.reader.cancel().catch(() => {});
+    }
+
     if (this.writer) {
       await this.writer.close();
       this.writer = null;
@@ -266,6 +390,7 @@ export class SerialRobot {
       this.port = null;
     }
 
+    this.incomingBuffer = "";
     this.onConnectionChange("disconnected");
     this.onLog("Puerto serie desconectado.");
   }

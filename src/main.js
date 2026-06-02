@@ -1,9 +1,17 @@
 import { BluetoothRobot, SerialRobot } from "./bluetooth.js";
 import { JoystickController } from "./joystick.js";
+import {
+  advancePose,
+  buildAvoidanceManeuver,
+  buildRejoinPlan,
+  DEFAULT_OBSTACLE_THRESHOLD_CM,
+  parseUltrasonicMessage,
+} from "./obstacleAvoidance.js";
 
 const SEND_INTERVAL_MS = 50;
 const STORAGE_KEY = "robot.savedLocations";
 const RECORDINGS_STORAGE_KEY = "robot.savedRecordings";
+const OBSTACLE_THRESHOLD_STORAGE_KEY = "robot.obstacleThresholdCm";
 
 const elements = {
   connectButton: document.querySelector("#connectButton"),
@@ -12,6 +20,7 @@ const elements = {
   messageLog: document.querySelector("#messageLog"),
   connectionMode: document.querySelector("#connectionMode"),
   baudRate: document.querySelector("#baudRate"),
+  obstacleThresholdCm: document.querySelector("#obstacleThresholdCm"),
   xValue: document.querySelector("#xValue"),
   yValue: document.querySelector("#yValue"),
   manualModeButton: document.querySelector("#manualModeButton"),
@@ -53,15 +62,25 @@ let isPlayingBack = false;
 let playbackFrames = [];
 let playbackIndex = 0;
 let playbackRecordingName = "";
+let playbackOriginalFrames = [];
+let playbackOriginalIndex = 0;
+let playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
+let isAvoiding = false;
+let injectedPlaybackFrames = [];
+let lastObstacleTriggerAt = 0;
+let avoidanceRejoinIndex = 0;
+const OBSTACLE_COOLDOWN_MS = 800;
 
 const bluetoothRobot = new BluetoothRobot({
   onConnectionChange: updateConnectionState,
   onLog: updateLog,
+  onMessage: handleRobotMessage,
 });
 
 const serialRobot = new SerialRobot({
   onConnectionChange: updateConnectionState,
   onLog: updateLog,
+  onMessage: handleRobotMessage,
   getBaudRate: () => Number(elements.baudRate.value),
 });
 
@@ -75,6 +94,7 @@ const joystick = new JoystickController({
 });
 
 joystick.init();
+loadObstacleThreshold();
 updateConnectionState("disconnected");
 updateTelemetry(currentPosition);
 updateLocationReadout();
@@ -110,6 +130,14 @@ elements.connectionMode.addEventListener("change", async () => {
 
   updateConnectionState("disconnected");
   updateConnectionMode();
+});
+
+elements.obstacleThresholdCm.addEventListener("change", () => {
+  persistObstacleThreshold();
+});
+
+elements.obstacleThresholdCm.addEventListener("input", () => {
+  persistObstacleThreshold();
 });
 
 elements.manualModeButton.addEventListener("click", () => setAppMode("manual"));
@@ -218,16 +246,26 @@ sendTimer = window.setInterval(async () => {
   let shouldSend = false;
 
   if (isPlayingBack) {
-    if (playbackIndex >= playbackFrames.length) {
+    if (injectedPlaybackFrames.length > 0) {
+      position = injectedPlaybackFrames.shift();
+      shouldSend = true;
+    } else if (playbackIndex >= playbackFrames.length) {
       stopPlayback(`Reproduccion "${playbackRecordingName}" finalizada.`);
       return;
+    } else {
+      position = playbackFrames[playbackIndex];
+      playbackIndex += 1;
+      playbackOriginalIndex += 1;
+      shouldSend = true;
     }
 
-    position = playbackFrames[playbackIndex];
-    playbackIndex += 1;
-    shouldSend = true;
     updateTelemetry(position);
     updatePlaybackProgress();
+    playbackEstimatedPose = advancePose(playbackEstimatedPose, position);
+
+    if (isAvoiding && injectedPlaybackFrames.length === 0) {
+      finishAvoidance();
+    }
   } else if (appMode === "manual") {
     position = currentPosition;
     shouldSend = true;
@@ -319,6 +357,48 @@ function updateLog(message) {
   elements.messageLog.textContent = message;
 }
 
+function handleRobotMessage(line) {
+  const sensorData = parseUltrasonicMessage(line, getObstacleThresholdCm());
+  if (!sensorData) return;
+
+  if (!isPlayingBack || isAvoiding || injectedPlaybackFrames.length > 0) return;
+  if (!sensorData.obstacle) return;
+  if (Date.now() - lastObstacleTriggerAt < OBSTACLE_COOLDOWN_MS) return;
+
+  startAvoidance(sensorData.distance);
+}
+
+function startAvoidance(distanceCm) {
+  const currentFrame = playbackFrames[playbackIndex] ?? playbackFrames[playbackFrames.length - 1] ?? { x: 0, y: 0 };
+  const rejoinIndex = playbackOriginalIndex;
+
+  isAvoiding = true;
+  lastObstacleTriggerAt = Date.now();
+  injectedPlaybackFrames = buildAvoidanceManeuver(currentFrame);
+  avoidanceRejoinIndex = rejoinIndex;
+
+  const distanceLabel = Number.isFinite(distanceCm) ? `${distanceCm} cm` : "cerca";
+  updatePlaybackProgress();
+  updateLog(`Obstaculo a ${distanceLabel}. Esquivando y recalculando recorrido...`);
+}
+
+function finishAvoidance() {
+  const { transitionFrames, rejoinIndex } = buildRejoinPlan(
+    playbackEstimatedPose,
+    playbackOriginalFrames,
+    avoidanceRejoinIndex,
+  );
+
+  playbackFrames = playbackOriginalFrames.slice(rejoinIndex);
+  playbackIndex = 0;
+  playbackOriginalIndex = rejoinIndex;
+  injectedPlaybackFrames = transitionFrames;
+  isAvoiding = false;
+
+  updatePlaybackProgress();
+  updateLog(`Recorrido recalculado desde el paso ${rejoinIndex + 1}.`);
+}
+
 async function sendCoordinates(position = currentPosition) {
   return getActiveRobot().sendCoordinates(position);
 }
@@ -388,11 +468,18 @@ async function startPlayback(recording) {
   }
 
   isPlayingBack = true;
-  playbackFrames = recording.frames.map((frame) => ({
+  playbackOriginalFrames = recording.frames.map((frame) => ({
     x: Number(frame.x),
     y: Number(frame.y),
   }));
+  playbackFrames = playbackOriginalFrames.map((frame) => ({ ...frame }));
   playbackIndex = 0;
+  playbackOriginalIndex = 0;
+  playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
+  isAvoiding = false;
+  injectedPlaybackFrames = [];
+  lastObstacleTriggerAt = 0;
+  avoidanceRejoinIndex = 0;
   playbackRecordingName = recording.name;
   joystick.setEnabled(false);
   setAppMode("recordings");
@@ -405,7 +492,14 @@ function stopPlayback(message = "") {
 
   isPlayingBack = false;
   playbackFrames = [];
+  playbackOriginalFrames = [];
   playbackIndex = 0;
+  playbackOriginalIndex = 0;
+  playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
+  isAvoiding = false;
+  injectedPlaybackFrames = [];
+  lastObstacleTriggerAt = 0;
+  avoidanceRejoinIndex = 0;
   playbackRecordingName = "";
   joystick.setEnabled(true);
   currentPosition = { x: 0, y: 0 };
@@ -441,7 +535,13 @@ function updatePlaybackProgress() {
   }
 
   elements.playbackProgressName.textContent = playbackRecordingName;
-  elements.playbackStepValue.textContent = `${playbackIndex} / ${playbackFrames.length}`;
+
+  if (isAvoiding || injectedPlaybackFrames.length > 0) {
+    elements.playbackStepValue.textContent = `${playbackOriginalIndex} / ${playbackOriginalFrames.length} · esquivando`;
+    return;
+  }
+
+  elements.playbackStepValue.textContent = `${playbackOriginalIndex} / ${playbackOriginalFrames.length}`;
 }
 
 function renderSavedRecordings() {
@@ -707,6 +807,25 @@ function normalizeGeolocationError(error) {
 
 function formatCoordinate(value) {
   return Number(value).toFixed(7);
+}
+
+function getObstacleThresholdCm() {
+  const threshold = Number(elements.obstacleThresholdCm.value);
+  if (!Number.isFinite(threshold)) return DEFAULT_OBSTACLE_THRESHOLD_CM;
+  return Math.max(5, Math.min(300, Math.round(threshold)));
+}
+
+function loadObstacleThreshold() {
+  const stored = Number(window.localStorage.getItem(OBSTACLE_THRESHOLD_STORAGE_KEY));
+  elements.obstacleThresholdCm.value = Number.isFinite(stored)
+    ? String(Math.max(5, Math.min(300, Math.round(stored))))
+    : String(DEFAULT_OBSTACLE_THRESHOLD_CM);
+}
+
+function persistObstacleThreshold() {
+  const threshold = getObstacleThresholdCm();
+  elements.obstacleThresholdCm.value = String(threshold);
+  window.localStorage.setItem(OBSTACLE_THRESHOLD_STORAGE_KEY, String(threshold));
 }
 
 function escapeHtml(value) {
