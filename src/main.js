@@ -1,14 +1,12 @@
 import { BluetoothRobot, SerialRobot } from "./bluetooth.js";
 import { JoystickController } from "./joystick.js";
 import {
-  advancePose,
-  buildAvoidanceManeuver,
-  buildRejoinPlan,
   DEFAULT_OBSTACLE_THRESHOLD_CM,
   parseUltrasonicMessage,
+  SEND_INTERVAL_MS,
 } from "./obstacleAvoidance.js";
 
-const SEND_INTERVAL_MS = 50;
+const PRECAUTION_DELAY_MS = 2000;
 const STORAGE_KEY = "robot.savedLocations";
 const RECORDINGS_STORAGE_KEY = "robot.savedRecordings";
 const OBSTACLE_THRESHOLD_STORAGE_KEY = "robot.obstacleThresholdCm";
@@ -50,27 +48,30 @@ const elements = {
   joystickKnob: document.querySelector("#joystickKnob"),
 };
 
-let appMode = "manual";
+// ── Estado general ────────────────────────────────────────────────────────────
+let appMode         = "manual";
 let currentPosition = { x: 0, y: 0 };
 let currentLocation = null;
-let savedLocations = loadSavedLocations();
+let savedLocations  = loadSavedLocations();
 let savedRecordings = loadSavedRecordings();
-let sendTimer = null;
-let isRecording = false;
-let recordingFrames = [];
-let isPlayingBack = false;
-let playbackFrames = [];
-let playbackIndex = 0;
-let playbackRecordingName = "";
-let playbackOriginalFrames = [];
-let playbackOriginalIndex = 0;
-let playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
-let isAvoiding = false;
-let injectedPlaybackFrames = [];
-let lastObstacleTriggerAt = 0;
-let avoidanceRejoinIndex = 0;
-const OBSTACLE_COOLDOWN_MS = 800;
+let sendTimer       = null;
 
+// ── Grabación ─────────────────────────────────────────────────────────────────
+let isRecording    = false;
+let recordingFrames = [];
+
+// ── Reproducción ──────────────────────────────────────────────────────────────
+let isPlayingBack         = false;
+let playbackFrames        = [];
+let playbackIndex         = 0;
+let playbackRecordingName = "";
+
+// ── Obstáculo ─────────────────────────────────────────────────────────────────
+let obstaclePaused = false;   // true = robot parado esperando que se despeje
+let obstacleLeftAt = 0;       // timestamp en que desapareció el obstáculo (0 = sigue ahí)
+let pausedAtIndex  = 0;       // paso exacto donde se congeló la reproducción
+
+// ── Robots y joystick ─────────────────────────────────────────────────────────
 const bluetoothRobot = new BluetoothRobot({
   onConnectionChange: updateConnectionState,
   onLog: updateLog,
@@ -104,14 +105,13 @@ updateConnectionMode();
 setAppMode("manual");
 updateRecordingControls();
 
+// ── Event listeners ───────────────────────────────────────────────────────────
 elements.connectButton.addEventListener("click", async () => {
   const robot = getActiveRobot();
-
   if (robot.isConnected) {
     await robot.disconnect();
     return;
   }
-
   try {
     elements.connectButton.disabled = true;
     await robot.connect();
@@ -127,42 +127,26 @@ elements.connectionMode.addEventListener("change", async () => {
   if (getInactiveRobot().isConnected) {
     await getInactiveRobot().disconnect();
   }
-
   updateConnectionState("disconnected");
   updateConnectionMode();
 });
 
-elements.obstacleThresholdCm.addEventListener("change", () => {
-  persistObstacleThreshold();
-});
+elements.obstacleThresholdCm.addEventListener("change", () => persistObstacleThreshold());
+elements.obstacleThresholdCm.addEventListener("input",  () => persistObstacleThreshold());
 
-elements.obstacleThresholdCm.addEventListener("input", () => {
-  persistObstacleThreshold();
-});
-
-elements.manualModeButton.addEventListener("click", () => setAppMode("manual"));
-
-elements.recordingsModeButton.addEventListener("click", () => setAppMode("recordings"));
-
+elements.manualModeButton.addEventListener("click",    () => setAppMode("manual"));
+elements.recordingsModeButton.addEventListener("click",() => setAppMode("recordings"));
 elements.locationsModeButton.addEventListener("click", () => {
   setAppMode("locations");
-  if (!currentLocation) {
-    void refreshCurrentLocation();
-  }
+  if (!currentLocation) void refreshCurrentLocation();
 });
 
-elements.refreshLocationButton.addEventListener("click", () => {
-  void refreshCurrentLocation();
-});
-
-elements.saveLocationButton.addEventListener("click", () => {
-  saveCurrentLocation();
-});
+elements.refreshLocationButton.addEventListener("click", () => void refreshCurrentLocation());
+elements.saveLocationButton.addEventListener("click",    () => saveCurrentLocation());
 
 elements.clearLocationsButton.addEventListener("click", () => {
   if (savedLocations.length === 0) return;
-  if (!window.confirm("Borrar todas las ubicaciones guardadas?")) return;
-
+  if (!window.confirm("¿Borrar todas las ubicaciones guardadas?")) return;
   savedLocations = [];
   persistSavedLocations();
   renderSavedLocations();
@@ -172,118 +156,108 @@ elements.clearLocationsButton.addEventListener("click", () => {
 elements.savedLocationsList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
-
   const location = savedLocations.find((item) => item.id === button.dataset.id);
   if (!location) return;
-
   if (button.dataset.action === "go") {
     void sendDestination(location);
     return;
   }
-
   if (button.dataset.action === "delete") {
     savedLocations = savedLocations.filter((item) => item.id !== location.id);
     persistSavedLocations();
     renderSavedLocations();
-    updateLog(`Ubicacion "${location.name}" eliminada.`);
+    updateLog(`Ubicación "${location.name}" eliminada.`);
   }
 });
 
 elements.recordButton.addEventListener("click", () => {
   if (isPlayingBack) return;
-
-  if (isRecording) {
-    stopRecording();
-    return;
-  }
-
+  if (isRecording) { stopRecording(); return; }
   startRecording();
 });
 
 elements.clearRecordingsButton.addEventListener("click", () => {
   if (savedRecordings.length === 0) return;
-  if (!window.confirm("Borrar todas las grabaciones guardadas?")) return;
-
+  if (!window.confirm("¿Borrar todas las grabaciones guardadas?")) return;
   savedRecordings = [];
   persistSavedRecordings();
   renderSavedRecordings();
   updateLog("Grabaciones guardadas borradas.");
 });
 
-elements.stopPlaybackButton.addEventListener("click", () => {
-  stopPlayback("Reproduccion detenida.");
-});
+elements.stopPlaybackButton.addEventListener("click", () => stopPlayback("Reproducción detenida."));
 
 elements.savedRecordingsList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) return;
-
   const recording = savedRecordings.find((item) => item.id === button.dataset.id);
   if (!recording) return;
-
   if (button.dataset.action === "play") {
     void startPlayback(recording);
     return;
   }
-
   if (button.dataset.action === "delete") {
-    if (isPlayingBack && playbackRecordingName === recording.name) {
-      stopPlayback();
-    }
-
+    if (isPlayingBack && playbackRecordingName === recording.name) stopPlayback();
     savedRecordings = savedRecordings.filter((item) => item.id !== recording.id);
     persistSavedRecordings();
     renderSavedRecordings();
-    updateLog(`Grabacion "${recording.name}" eliminada.`);
+    updateLog(`Grabación "${recording.name}" eliminada.`);
   }
 });
 
+// ── Bucle principal de envío ──────────────────────────────────────────────────
 sendTimer = window.setInterval(async () => {
   const robot = getActiveRobot();
   if (!robot.isConnected) return;
 
   let position = null;
-  let shouldSend = false;
 
   if (isPlayingBack) {
-    if (injectedPlaybackFrames.length > 0) {
-      position = injectedPlaybackFrames.shift();
-      shouldSend = true;
-    } else if (playbackIndex >= playbackFrames.length) {
-      stopPlayback(`Reproduccion "${playbackRecordingName}" finalizada.`);
-      return;
+    if (obstaclePaused) {
+      // Comprobar si ya pasó el tiempo de precaución
+      const precautionDone =
+        obstacleLeftAt > 0 &&
+        Date.now() - obstacleLeftAt >= PRECAUTION_DELAY_MS;
+
+      if (precautionDone) {
+        // Reanudar desde el paso exacto donde se paró
+        obstaclePaused = false;
+        obstacleLeftAt = 0;
+        playbackIndex  = pausedAtIndex;
+        updateLog(`Obstáculo despejado. Reanudando desde paso ${pausedAtIndex + 1}.`);
+        updatePlaybackProgress();
+        return; // el siguiente tick ya envía el frame correcto
+      }
+
+      // Aún parado: mandar 0,0
+      position = { x: 0, y: 0 };
     } else {
+      // Reproducción normal
+      if (playbackIndex >= playbackFrames.length) {
+        stopPlayback(`Reproducción "${playbackRecordingName}" finalizada.`);
+        return;
+      }
       position = playbackFrames[playbackIndex];
-      playbackIndex += 1;
-      playbackOriginalIndex += 1;
-      shouldSend = true;
+      playbackIndex++;
     }
 
     updateTelemetry(position);
     updatePlaybackProgress();
-    playbackEstimatedPose = advancePose(playbackEstimatedPose, position);
 
-    if (isAvoiding && injectedPlaybackFrames.length === 0) {
-      finishAvoidance();
-    }
   } else if (appMode === "manual") {
     position = currentPosition;
-    shouldSend = true;
-
     if (isRecording) {
       recordingFrames.push({ x: position.x, y: position.y });
     }
   }
 
-  if (!shouldSend) return;
+  if (!position) return;
 
   try {
-    await getActiveRobot().sendCoordinates(position);
+    await robot.sendCoordinates(position);
   } catch (error) {
     updateLog(`Error enviando datos: ${error.message}`);
-    if (isPlayingBack) {
-      stopPlayback("Reproduccion interrumpida por error de envio.");
-    }
+    if (isPlayingBack) stopPlayback("Reproducción interrumpida por error de envío.");
   }
 }, SEND_INTERVAL_MS);
 
@@ -291,33 +265,143 @@ window.addEventListener("pagehide", () => {
   window.clearInterval(sendTimer);
   stopPlayback();
   stopRecording(false);
-  if (getActiveRobot().isConnected) {
-    getActiveRobot().disconnect();
-  }
+  if (getActiveRobot().isConnected) getActiveRobot().disconnect();
 });
 
-function setAppMode(nextMode) {
-  if (nextMode !== "manual" && isRecording) {
-    stopRecording(false);
+// ── Mensajes del robot (sensor de distancia) ──────────────────────────────────
+function handleRobotMessage(line) {
+  const sensorData = parseUltrasonicMessage(line, getObstacleThresholdCm());
+  if (!sensorData || !isPlayingBack) return;
+
+  if (sensorData.obstacle) {
+    // Objeto detectado → congelar si no estaba ya congelado
+    if (!obstaclePaused) {
+      obstaclePaused = true;
+      obstacleLeftAt = 0;
+      pausedAtIndex  = playbackIndex;   // guardamos el paso exacto
+      const label = Number.isFinite(sensorData.distance)
+        ? `${sensorData.distance} cm`
+        : "cerca";
+      updateLog(`Obstáculo a ${label}. Robot parado en paso ${pausedAtIndex + 1}.`);
+      updatePlaybackProgress();
+    }
+  } else {
+    // Objeto despejado → arrancar temporizador de precaución (solo una vez)
+    if (obstaclePaused && obstacleLeftAt === 0) {
+      obstacleLeftAt = Date.now();
+      updateLog(`Obstáculo despejado. Reanudando en ${PRECAUTION_DELAY_MS / 1000} s...`);
+    }
+  }
+}
+
+// ── Reproducción ──────────────────────────────────────────────────────────────
+async function startPlayback(recording) {
+  const robot = getActiveRobot();
+  if (!robot.isConnected) {
+    updateLog("Conecta el robot antes de reproducir una grabación.");
+    return;
+  }
+  if (!Array.isArray(recording.frames) || recording.frames.length === 0) {
+    updateLog("La grabación no tiene movimientos para reproducir.");
+    return;
+  }
+  if (isRecording) stopRecording(false);
+  if (isPlayingBack) stopPlayback();
+
+  isPlayingBack         = true;
+  playbackFrames        = recording.frames.map((f) => ({ x: Number(f.x), y: Number(f.y) }));
+  playbackIndex         = 0;
+  playbackRecordingName = recording.name;
+  obstaclePaused        = false;
+  obstacleLeftAt        = 0;
+  pausedAtIndex         = 0;
+
+  joystick.setEnabled(false);
+  setAppMode("recordings");
+  updatePlaybackControls();
+  updateLog(`Reproduciendo "${recording.name}" cada ${SEND_INTERVAL_MS} ms.`);
+}
+
+function stopPlayback(message = "") {
+  if (!isPlayingBack) return;
+
+  isPlayingBack         = false;
+  playbackFrames        = [];
+  playbackIndex         = 0;
+  playbackRecordingName = "";
+  obstaclePaused        = false;
+  obstacleLeftAt        = 0;
+  pausedAtIndex         = 0;
+
+  joystick.setEnabled(true);
+  currentPosition = { x: 0, y: 0 };
+  updateTelemetry(currentPosition);
+  updatePlaybackControls();
+  updateRecordingControls();
+  if (message) updateLog(message);
+}
+
+// ── Grabación ─────────────────────────────────────────────────────────────────
+function startRecording() {
+  if (isPlayingBack || appMode !== "manual") return;
+  isRecording     = true;
+  recordingFrames = [];
+  updateRecordingControls();
+  updateLog(`Grabando movimientos cada ${SEND_INTERVAL_MS} ms.`);
+}
+
+function stopRecording(shouldSave = true) {
+  if (!isRecording) return;
+  isRecording = false;
+  const frames = recordingFrames;
+  recordingFrames = [];
+  updateRecordingControls();
+
+  if (!shouldSave) {
+    updateLog("Grabación cancelada.");
+    return;
+  }
+  if (frames.length === 0) {
+    updateLog("No se guardó la grabación: no hay movimientos registrados.");
+    return;
   }
 
-  if (nextMode !== "recordings" && isPlayingBack) {
-    stopPlayback();
-  }
+  const name = elements.recordingNameInput.value.trim() || `Grabación ${savedRecordings.length + 1}`;
+  const recording = {
+    id: window.crypto?.randomUUID ? window.crypto.randomUUID() : String(Date.now()),
+    name,
+    intervalMs: SEND_INTERVAL_MS,
+    frames,
+    savedAt: Date.now(),
+  };
+
+  savedRecordings = [recording, ...savedRecordings].slice(0, 30);
+  elements.recordingNameInput.value = "";
+  persistSavedRecordings();
+  renderSavedRecordings();
+  updateLog(`Grabación "${recording.name}" guardada (${formatRecordingDuration(recording)}).`);
+}
+
+// ── UI ────────────────────────────────────────────────────────────────────────
+function setAppMode(nextMode) {
+  if (nextMode !== "manual" && isRecording) stopRecording(false);
+  if (nextMode !== "recordings" && isPlayingBack) stopPlayback();
 
   appMode = nextMode;
-  const isManual = appMode === "manual";
-  const isRecordings = appMode === "recordings";
+  const isManual      = appMode === "manual";
+  const isRecordings  = appMode === "recordings";
+  const isLocations   = appMode === "locations";
 
-  elements.manualPanel.hidden = !isManual;
+  elements.manualPanel.hidden    = !isManual;
   elements.recordingsPanel.hidden = !isRecordings;
-  elements.locationsPanel.hidden = appMode !== "locations";
+  elements.locationsPanel.hidden  = !isLocations;
+
   elements.manualModeButton.classList.toggle("is-active", isManual);
   elements.recordingsModeButton.classList.toggle("is-active", isRecordings);
-  elements.locationsModeButton.classList.toggle("is-active", appMode === "locations");
+  elements.locationsModeButton.classList.toggle("is-active", isLocations);
   elements.manualModeButton.setAttribute("aria-pressed", String(isManual));
   elements.recordingsModeButton.setAttribute("aria-pressed", String(isRecordings));
-  elements.locationsModeButton.setAttribute("aria-pressed", String(appMode === "locations"));
+  elements.locationsModeButton.setAttribute("aria-pressed", String(isLocations));
 
   if (!isManual && !isPlayingBack) {
     currentPosition = { x: 0, y: 0 };
@@ -335,14 +419,15 @@ function updateConnectionState(state) {
   };
 
   elements.connectionPill.dataset.state = state;
-  elements.connectionState.textContent = labels[state] || labels.disconnected;
+  elements.connectionState.textContent  = labels[state] || labels.disconnected;
   elements.connectButton.classList.toggle("is-connected", state === "connected");
   elements.connectionMode.disabled = state !== "disconnected";
-  elements.baudRate.disabled = state !== "disconnected" || elements.connectionMode.value !== "serial";
+  elements.baudRate.disabled =
+    state !== "disconnected" || elements.connectionMode.value !== "serial";
   elements.connectButton.textContent = getConnectButtonLabel(state);
 
   if (state === "disconnected" && isPlayingBack) {
-    stopPlayback("Reproduccion detenida: robot desconectado.");
+    stopPlayback("Reproducción detenida: robot desconectado.");
   }
 
   updateRecordingControls();
@@ -357,171 +442,16 @@ function updateLog(message) {
   elements.messageLog.textContent = message;
 }
 
-function handleRobotMessage(line) {
-  const sensorData = parseUltrasonicMessage(line, getObstacleThresholdCm());
-  if (!sensorData) return;
-
-  if (!isPlayingBack || isAvoiding || injectedPlaybackFrames.length > 0) return;
-  if (!sensorData.obstacle) return;
-  if (Date.now() - lastObstacleTriggerAt < OBSTACLE_COOLDOWN_MS) return;
-
-  startAvoidance(sensorData.distance);
-}
-
-function startAvoidance(distanceCm) {
-  const currentFrame = playbackFrames[playbackIndex] ?? playbackFrames[playbackFrames.length - 1] ?? { x: 0, y: 0 };
-  const rejoinIndex = playbackOriginalIndex;
-
-  isAvoiding = true;
-  lastObstacleTriggerAt = Date.now();
-  injectedPlaybackFrames = buildAvoidanceManeuver(currentFrame);
-  avoidanceRejoinIndex = rejoinIndex;
-
-  const distanceLabel = Number.isFinite(distanceCm) ? `${distanceCm} cm` : "cerca";
-  updatePlaybackProgress();
-  updateLog(`Obstaculo a ${distanceLabel}. Esquivando y recalculando recorrido...`);
-}
-
-function finishAvoidance() {
-  const { transitionFrames, rejoinIndex } = buildRejoinPlan(
-    playbackEstimatedPose,
-    playbackOriginalFrames,
-    avoidanceRejoinIndex,
-  );
-
-  playbackFrames = playbackOriginalFrames.slice(rejoinIndex);
-  playbackIndex = 0;
-  playbackOriginalIndex = rejoinIndex;
-  injectedPlaybackFrames = transitionFrames;
-  isAvoiding = false;
-
-  updatePlaybackProgress();
-  updateLog(`Recorrido recalculado desde el paso ${rejoinIndex + 1}.`);
-}
-
-async function sendCoordinates(position = currentPosition) {
-  return getActiveRobot().sendCoordinates(position);
-}
-
-function startRecording() {
-  if (isPlayingBack || appMode !== "manual") return;
-
-  isRecording = true;
-  recordingFrames = [];
-  updateRecordingControls();
-  updateLog(`Grabando movimientos cada ${SEND_INTERVAL_MS} ms.`);
-}
-
-function stopRecording(shouldSave = true) {
-  if (!isRecording) return;
-
-  isRecording = false;
-  const frames = recordingFrames;
-  recordingFrames = [];
-  updateRecordingControls();
-
-  if (!shouldSave) {
-    updateLog("Grabacion cancelada.");
-    return;
-  }
-
-  if (frames.length === 0) {
-    updateLog("No se guardo la grabacion: no hay movimientos registrados.");
-    return;
-  }
-
-  const name = elements.recordingNameInput.value.trim() || `Grabacion ${savedRecordings.length + 1}`;
-  const recording = {
-    id: window.crypto?.randomUUID ? window.crypto.randomUUID() : String(Date.now()),
-    name,
-    intervalMs: SEND_INTERVAL_MS,
-    frames,
-    savedAt: Date.now(),
-  };
-
-  savedRecordings = [recording, ...savedRecordings].slice(0, 30);
-  elements.recordingNameInput.value = "";
-  persistSavedRecordings();
-  renderSavedRecordings();
-  updateLog(`Grabacion "${recording.name}" guardada (${formatRecordingDuration(recording)}).`);
-}
-
-async function startPlayback(recording) {
-  const robot = getActiveRobot();
-
-  if (!robot.isConnected) {
-    updateLog("Conecta el robot antes de reproducir una grabacion.");
-    return;
-  }
-
-  if (!Array.isArray(recording.frames) || recording.frames.length === 0) {
-    updateLog("La grabacion no tiene movimientos para reproducir.");
-    return;
-  }
-
-  if (isRecording) {
-    stopRecording(false);
-  }
-
-  if (isPlayingBack) {
-    stopPlayback();
-  }
-
-  isPlayingBack = true;
-  playbackOriginalFrames = recording.frames.map((frame) => ({
-    x: Number(frame.x),
-    y: Number(frame.y),
-  }));
-  playbackFrames = playbackOriginalFrames.map((frame) => ({ ...frame }));
-  playbackIndex = 0;
-  playbackOriginalIndex = 0;
-  playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
-  isAvoiding = false;
-  injectedPlaybackFrames = [];
-  lastObstacleTriggerAt = 0;
-  avoidanceRejoinIndex = 0;
-  playbackRecordingName = recording.name;
-  joystick.setEnabled(false);
-  setAppMode("recordings");
-  updatePlaybackControls();
-  updateLog(`Reproduciendo "${recording.name}" cada ${SEND_INTERVAL_MS} ms.`);
-}
-
-function stopPlayback(message = "") {
-  if (!isPlayingBack) return;
-
-  isPlayingBack = false;
-  playbackFrames = [];
-  playbackOriginalFrames = [];
-  playbackIndex = 0;
-  playbackOriginalIndex = 0;
-  playbackEstimatedPose = { x: 0, y: 0, heading: 0 };
-  isAvoiding = false;
-  injectedPlaybackFrames = [];
-  lastObstacleTriggerAt = 0;
-  avoidanceRejoinIndex = 0;
-  playbackRecordingName = "";
-  joystick.setEnabled(true);
-  currentPosition = { x: 0, y: 0 };
-  updateTelemetry(currentPosition);
-  updatePlaybackControls();
-  updateRecordingControls();
-
-  if (message) {
-    updateLog(message);
-  }
-}
-
 function updateRecordingControls() {
   elements.recordButton.disabled = isPlayingBack;
   elements.recordButton.classList.toggle("is-recording", isRecording);
-  elements.recordButton.textContent = isRecording ? "Detener y guardar" : "Iniciar grabacion";
+  elements.recordButton.textContent = isRecording ? "Detener y guardar" : "Iniciar grabación";
   elements.recordingNameInput.disabled = isRecording || isPlayingBack;
 }
 
 function updatePlaybackControls() {
-  elements.stopPlaybackButton.hidden = !isPlayingBack;
-  elements.playbackProgress.hidden = !isPlayingBack;
+  elements.stopPlaybackButton.hidden    = !isPlayingBack;
+  elements.playbackProgress.hidden      = !isPlayingBack;
   elements.clearRecordingsButton.disabled = savedRecordings.length === 0 || isPlayingBack;
   updatePlaybackProgress();
   renderSavedRecordings();
@@ -530,37 +460,32 @@ function updatePlaybackControls() {
 function updatePlaybackProgress() {
   if (!isPlayingBack) {
     elements.playbackProgressName.textContent = "--";
-    elements.playbackStepValue.textContent = "0 / 0";
+    elements.playbackStepValue.textContent    = "0 / 0";
     return;
   }
 
   elements.playbackProgressName.textContent = playbackRecordingName;
 
-  if (isAvoiding || injectedPlaybackFrames.length > 0) {
-    elements.playbackStepValue.textContent = `${playbackOriginalIndex} / ${playbackOriginalFrames.length} · esquivando`;
-    return;
-  }
-
-  elements.playbackStepValue.textContent = `${playbackOriginalIndex} / ${playbackOriginalFrames.length}`;
+  const label = obstaclePaused ? " · parado por obstáculo" : "";
+  elements.playbackStepValue.textContent =
+    `${playbackIndex} / ${playbackFrames.length}${label}`;
 }
 
 function renderSavedRecordings() {
   elements.clearRecordingsButton.disabled = savedRecordings.length === 0 || isPlayingBack;
 
   if (savedRecordings.length === 0) {
-    elements.savedRecordingsList.innerHTML = '<p class="empty-state">No hay grabaciones guardadas.</p>';
+    elements.savedRecordingsList.innerHTML =
+      '<p class="empty-state">No hay grabaciones guardadas.</p>';
     return;
   }
 
   elements.savedRecordingsList.innerHTML = savedRecordings.map((recording) => {
     const savedDate = new Date(recording.savedAt).toLocaleString("es-ES", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
     });
     const escapedId = escapeHtml(recording.id);
-    const isActive = isPlayingBack && playbackRecordingName === recording.name;
+    const isActive  = isPlayingBack && playbackRecordingName === recording.name;
 
     return `
       <article class="saved-location">
@@ -578,49 +503,75 @@ function renderSavedRecordings() {
   }).join("");
 }
 
-function loadSavedRecordings() {
+// ── GPS / Ubicaciones ─────────────────────────────────────────────────────────
+async function refreshCurrentLocation() {
+  if (!("geolocation" in navigator)) {
+    updateLog("Este navegador no tiene geolocalización disponible.");
+    elements.gpsState.textContent = "No disponible";
+    return;
+  }
+
+  elements.refreshLocationButton.disabled = true;
+  elements.saveLocationButton.disabled    = true;
+  elements.gpsState.textContent = "Buscando...";
+
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(RECORDINGS_STORAGE_KEY) || "[]");
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter((recording) => (
-      typeof recording?.id === "string" &&
-      typeof recording?.name === "string" &&
-      Array.isArray(recording?.frames) &&
-      recording.frames.length > 0 &&
-      recording.frames.every((frame) => Number.isFinite(frame?.x) && Number.isFinite(frame?.y))
-    ));
-  } catch {
-    return [];
+    currentLocation = await getCurrentLocation();
+    updateLocationReadout();
+    updateLog("Ubicación GPS actualizada.");
+  } catch (error) {
+    elements.gpsState.textContent = "Sin permiso";
+    updateLog(error.message || "No se pudo obtener la ubicación del móvil.");
+  } finally {
+    elements.refreshLocationButton.disabled = false;
+    elements.saveLocationButton.disabled    = false;
   }
 }
 
-function persistSavedRecordings() {
-  window.localStorage.setItem(RECORDINGS_STORAGE_KEY, JSON.stringify(savedRecordings));
+function getCurrentLocation() {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => resolve({
+        latitude:  position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy:  position.coords.accuracy,
+        savedAt:   Date.now(),
+      }),
+      (error) => reject(normalizeGeolocationError(error)),
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 12000 },
+    );
+  });
 }
 
-function formatRecordingDuration(recording) {
-  const frameCount = recording.frames?.length || 0;
-  const intervalMs = recording.intervalMs || SEND_INTERVAL_MS;
-  const totalSeconds = (frameCount * intervalMs) / 1000;
-
-  if (totalSeconds < 60) {
-    return `${frameCount} pasos · ${totalSeconds.toFixed(1)} s`;
+function saveCurrentLocation() {
+  if (!currentLocation) {
+    updateLog("Actualiza el GPS antes de guardar una ubicación.");
+    return;
   }
 
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.round(totalSeconds % 60);
-  return `${frameCount} pasos · ${minutes} min ${seconds} s`;
+  const name = elements.locationNameInput.value.trim() || `Punto ${savedLocations.length + 1}`;
+  const location = {
+    id:        window.crypto?.randomUUID ? window.crypto.randomUUID() : String(Date.now()),
+    name,
+    latitude:  currentLocation.latitude,
+    longitude: currentLocation.longitude,
+    accuracy:  currentLocation.accuracy,
+    savedAt:   Date.now(),
+  };
+
+  savedLocations = [location, ...savedLocations].slice(0, 30);
+  elements.locationNameInput.value = "";
+  persistSavedLocations();
+  renderSavedLocations();
+  updateLog(`Ubicación "${location.name}" guardada.`);
 }
 
 async function sendDestination(location) {
   const robot = getActiveRobot();
-
   if (!robot.isConnected) {
-    updateLog("Conecta el robot antes de enviar una ubicacion.");
+    updateLog("Conecta el robot antes de enviar una ubicación.");
     return;
   }
-
   try {
     await robot.sendDestination(location);
     updateLog(`Destino enviado: ${location.name}.`);
@@ -629,6 +580,89 @@ async function sendDestination(location) {
   }
 }
 
+function updateLocationReadout() {
+  if (!currentLocation) {
+    elements.gpsState.textContent      = "Sin iniciar";
+    elements.latitudeValue.textContent  = "--";
+    elements.longitudeValue.textContent = "--";
+    elements.accuracyValue.textContent  = "--";
+    return;
+  }
+
+  elements.gpsState.textContent      = "Listo";
+  elements.latitudeValue.textContent  = formatCoordinate(currentLocation.latitude);
+  elements.longitudeValue.textContent = formatCoordinate(currentLocation.longitude);
+  elements.accuracyValue.textContent  = `${Math.round(currentLocation.accuracy)} m`;
+}
+
+function renderSavedLocations() {
+  elements.clearLocationsButton.disabled = savedLocations.length === 0;
+
+  if (savedLocations.length === 0) {
+    elements.savedLocationsList.innerHTML =
+      '<p class="empty-state">No hay ubicaciones guardadas.</p>';
+    return;
+  }
+
+  elements.savedLocationsList.innerHTML = savedLocations.map((location) => {
+    const savedDate = new Date(location.savedAt).toLocaleString("es-ES", {
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    });
+    const escapedId = escapeHtml(location.id);
+
+    return `
+      <article class="saved-location">
+        <div>
+          <strong>${escapeHtml(location.name)}</strong>
+          <span>${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}</span>
+          <small>${savedDate} · precisión ${Math.round(location.accuracy)} m</small>
+        </div>
+        <div class="location-actions">
+          <button class="small-button" type="button" data-action="go"     data-id="${escapedId}">Ir</button>
+          <button class="small-button danger" type="button" data-action="delete" data-id="${escapedId}">Borrar</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+// ── Persistencia ──────────────────────────────────────────────────────────────
+function loadSavedRecordings() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(RECORDINGS_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((r) =>
+      typeof r?.id === "string" &&
+      typeof r?.name === "string" &&
+      Array.isArray(r?.frames) &&
+      r.frames.length > 0 &&
+      r.frames.every((f) => Number.isFinite(f?.x) && Number.isFinite(f?.y)),
+    );
+  } catch { return []; }
+}
+
+function persistSavedRecordings() {
+  window.localStorage.setItem(RECORDINGS_STORAGE_KEY, JSON.stringify(savedRecordings));
+}
+
+function loadSavedLocations() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((l) =>
+      typeof l?.id === "string" &&
+      typeof l?.name === "string" &&
+      Number.isFinite(l?.latitude) &&
+      Number.isFinite(l?.longitude),
+    );
+  } catch { return []; }
+}
+
+function persistSavedLocations() {
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLocations));
+}
+
+// ── Utilidades ────────────────────────────────────────────────────────────────
 function getActiveRobot() {
   return elements.connectionMode.value === "serial" ? serialRobot : bluetoothRobot;
 }
@@ -641,184 +675,29 @@ function updateConnectionMode() {
   const isSerial = elements.connectionMode.value === "serial";
   elements.baudRate.disabled = !isSerial;
   updateLog(isSerial
-    ? "HC-05 listo: emparejalo en el sistema y selecciona su puerto serie."
-    : "BLE UART listo: selecciona tu modulo y se probaran perfiles Nordic/HM-10 compatibles.");
+    ? "HC-05 listo: emparéjalo en el sistema y selecciona su puerto serie."
+    : "BLE UART listo: selecciona tu módulo y se probarán perfiles Nordic/HM-10 compatibles.",
+  );
 }
 
 function getConnectButtonLabel(state) {
-  const transportLabel = elements.connectionMode.value === "serial" ? "Serial HC-05" : "Bluetooth BLE";
-
-  if (state === "connected") return `Desconectar ${transportLabel}`;
+  const transportLabel = elements.connectionMode.value === "serial"
+    ? "Serial HC-05" : "Bluetooth BLE";
+  if (state === "connected")  return `Desconectar ${transportLabel}`;
   if (state === "connecting") return `Conectando ${transportLabel}`;
   return `Conectar ${transportLabel}`;
-}
-
-async function refreshCurrentLocation() {
-  if (!("geolocation" in navigator)) {
-    updateLog("Este navegador no tiene geolocalizacion disponible.");
-    elements.gpsState.textContent = "No disponible";
-    return;
-  }
-
-  elements.refreshLocationButton.disabled = true;
-  elements.saveLocationButton.disabled = true;
-  elements.gpsState.textContent = "Buscando...";
-
-  try {
-    currentLocation = await getCurrentLocation();
-    updateLocationReadout();
-    updateLog("Ubicacion GPS actualizada.");
-  } catch (error) {
-    elements.gpsState.textContent = "Sin permiso";
-    updateLog(error.message || "No se pudo obtener la ubicacion del movil.");
-  } finally {
-    elements.refreshLocationButton.disabled = false;
-    elements.saveLocationButton.disabled = false;
-  }
-}
-
-function getCurrentLocation() {
-  return new Promise((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolve({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          savedAt: Date.now(),
-        });
-      },
-      (error) => reject(normalizeGeolocationError(error)),
-      {
-        enableHighAccuracy: true,
-        maximumAge: 3000,
-        timeout: 12000,
-      },
-    );
-  });
-}
-
-function saveCurrentLocation() {
-  if (!currentLocation) {
-    updateLog("Actualiza el GPS antes de guardar una ubicacion.");
-    return;
-  }
-
-  const name = elements.locationNameInput.value.trim() || `Punto ${savedLocations.length + 1}`;
-  const location = {
-    id: window.crypto?.randomUUID ? window.crypto.randomUUID() : String(Date.now()),
-    name,
-    latitude: currentLocation.latitude,
-    longitude: currentLocation.longitude,
-    accuracy: currentLocation.accuracy,
-    savedAt: Date.now(),
-  };
-
-  savedLocations = [location, ...savedLocations].slice(0, 30);
-  elements.locationNameInput.value = "";
-  persistSavedLocations();
-  renderSavedLocations();
-  updateLog(`Ubicacion "${location.name}" guardada.`);
-}
-
-function updateLocationReadout() {
-  if (!currentLocation) {
-    elements.gpsState.textContent = "Sin iniciar";
-    elements.latitudeValue.textContent = "--";
-    elements.longitudeValue.textContent = "--";
-    elements.accuracyValue.textContent = "--";
-    return;
-  }
-
-  elements.gpsState.textContent = "Listo";
-  elements.latitudeValue.textContent = formatCoordinate(currentLocation.latitude);
-  elements.longitudeValue.textContent = formatCoordinate(currentLocation.longitude);
-  elements.accuracyValue.textContent = `${Math.round(currentLocation.accuracy)} m`;
-}
-
-function renderSavedLocations() {
-  elements.clearLocationsButton.disabled = savedLocations.length === 0;
-
-  if (savedLocations.length === 0) {
-    elements.savedLocationsList.innerHTML = '<p class="empty-state">No hay ubicaciones guardadas.</p>';
-    return;
-  }
-
-  elements.savedLocationsList.innerHTML = savedLocations.map((location) => {
-    const savedDate = new Date(location.savedAt).toLocaleString("es-ES", {
-      day: "2-digit",
-      month: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    const escapedId = escapeHtml(location.id);
-
-    return `
-      <article class="saved-location">
-        <div>
-          <strong>${escapeHtml(location.name)}</strong>
-          <span>${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}</span>
-          <small>${savedDate} · precision ${Math.round(location.accuracy)} m</small>
-        </div>
-        <div class="location-actions">
-          <button class="small-button" type="button" data-action="go" data-id="${escapedId}">Ir</button>
-          <button class="small-button danger" type="button" data-action="delete" data-id="${escapedId}">Borrar</button>
-        </div>
-      </article>
-    `;
-  }).join("");
-}
-
-function loadSavedLocations() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter((location) => (
-      typeof location?.id === "string" &&
-      typeof location?.name === "string" &&
-      Number.isFinite(location?.latitude) &&
-      Number.isFinite(location?.longitude)
-    ));
-  } catch {
-    return [];
-  }
-}
-
-function persistSavedLocations() {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLocations));
-}
-
-function normalizeGeolocationError(error) {
-  if (error?.code === error.PERMISSION_DENIED) {
-    return new Error("Permiso de ubicacion denegado. Activalo para guardar puntos.");
-  }
-
-  if (error?.code === error.POSITION_UNAVAILABLE) {
-    return new Error("El movil no pudo calcular la ubicacion actual.");
-  }
-
-  if (error?.code === error.TIMEOUT) {
-    return new Error("El GPS tardo demasiado. Prueba en exterior o cerca de una ventana.");
-  }
-
-  return new Error("No se pudo obtener la ubicacion del movil.");
-}
-
-function formatCoordinate(value) {
-  return Number(value).toFixed(7);
 }
 
 function getObstacleThresholdCm() {
   const threshold = Number(elements.obstacleThresholdCm.value);
   if (!Number.isFinite(threshold)) return DEFAULT_OBSTACLE_THRESHOLD_CM;
-  return Math.max(5, Math.min(300, Math.round(threshold)));
+  return Math.max(0, Math.min(300, Math.round(threshold)));
 }
 
 function loadObstacleThreshold() {
   const stored = Number(window.localStorage.getItem(OBSTACLE_THRESHOLD_STORAGE_KEY));
   elements.obstacleThresholdCm.value = Number.isFinite(stored)
-    ? String(Math.max(5, Math.min(300, Math.round(stored))))
+    ? String(Math.max(0, Math.min(300, Math.round(stored))))
     : String(DEFAULT_OBSTACLE_THRESHOLD_CM);
 }
 
@@ -826,6 +705,35 @@ function persistObstacleThreshold() {
   const threshold = getObstacleThresholdCm();
   elements.obstacleThresholdCm.value = String(threshold);
   window.localStorage.setItem(OBSTACLE_THRESHOLD_STORAGE_KEY, String(threshold));
+}
+
+function formatRecordingDuration(recording) {
+  const frameCount   = recording.frames?.length || 0;
+  const intervalMs   = recording.intervalMs || SEND_INTERVAL_MS;
+  const totalSeconds = (frameCount * intervalMs) / 1000;
+
+  if (totalSeconds < 60) return `${frameCount} pasos · ${totalSeconds.toFixed(1)} s`;
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return `${frameCount} pasos · ${minutes} min ${seconds} s`;
+}
+
+function normalizeGeolocationError(error) {
+  if (error?.code === error.PERMISSION_DENIED) {
+    return new Error("Permiso de ubicación denegado. Actívalo para guardar puntos.");
+  }
+  if (error?.code === error.POSITION_UNAVAILABLE) {
+    return new Error("El móvil no pudo calcular la ubicación actual.");
+  }
+  if (error?.code === error.TIMEOUT) {
+    return new Error("El GPS tardó demasiado. Prueba en exterior o cerca de una ventana.");
+  }
+  return new Error("No se pudo obtener la ubicación del móvil.");
+}
+
+function formatCoordinate(value) {
+  return Number(value).toFixed(7);
 }
 
 function escapeHtml(value) {
