@@ -285,6 +285,9 @@ function handleRobotMessage(line) {
       updateLog(`Obstáculo a ${label}. Robot parado en paso ${pausedAtIndex + 1}.`);
       updatePlaybackProgress();
     }
+
+    obstacleLeftAt = 0;
+    
   } else {
     // Objeto despejado → arrancar temporizador de precaución (solo una vez)
     if (obstaclePaused && obstacleLeftAt === 0) {
